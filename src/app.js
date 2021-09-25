@@ -10,7 +10,6 @@ const playerRouter = require("../routes/player-router.js");
 const gameRouter = require("../routes/game-router.js");
 
 const app = express();
-const dirname = __dirname;
 const port = process.env.Server_Port;
 
 // Log request to a logging file
