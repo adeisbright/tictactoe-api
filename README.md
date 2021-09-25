@@ -1,2 +1,2 @@
 # tictactoe-api
-Enables playing of tictactoe game 
+Enables multi-playing playing of tictactoe game 
