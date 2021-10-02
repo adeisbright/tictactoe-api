@@ -10,6 +10,7 @@ const {
 } = require("../lib/error-handler");
 const areAllNumbers = require("../lib/all-numbers");
 const isCoordinateUnique = require("../lib/unique-coordinates-checker");
+const findWinner = require("../lib/check-game-winner");
 let ObjectId = require("mongodb").ObjectId;
 
 class Game {
@@ -66,8 +67,8 @@ class Game {
             let db = await mongoClient.db(process.env.dbName);
             let gameCollection = db.collection("games");
 
-            // Check that the player has access to play this game
-            let isValidGame = await gameCollection.findOne(
+            // Check that this game exist for this player
+            let game = await gameCollection.findOne(
                 {
                     _id: ObjectId(gameId),
                 },
@@ -75,26 +76,27 @@ class Game {
                     "players.id": ObjectId(playerId),
                 }
             );
-            if (!isValidGame) {
-                return next(new NotFoundError("Not found"));
+            if (!game) {
+                return next(new NotFoundError("Game Not found "));
             }
-
+            if (game.isOver) {
+                return next(new BadRequestError("Game Over"));
+            }
             //Retrieve the players and the moves made for this game
-            let { players, moves } = isValidGame;
+            let { players, moves } = game;
 
             let currentPlayer = players.find(
                 (player) => String(player.id) === String(playerId)
             );
 
-            //Retrieve all already played cells
-            // Retrieve all moves already played by the current player
+            //Retrieve all already played cells and retrieve the moves of the current player
             let cells, currentPlayerMoves;
             if (moves) {
-                cells = moves.map((elem) => elem.move);
-
+                //Each move forms a cell
+                cells = moves.map((elem) => elem.cell);
                 currentPlayerMoves = moves
                     .filter((move) => move.marker === currentPlayer.marker)
-                    .map((cell) => cell.move);
+                    .map((val) => val.cell);
             }
 
             //Check if the right player made the move
@@ -122,10 +124,45 @@ class Game {
                 }
             }
 
-            //Check if game has reached end
-            //Check for a win situation
+            //Check for a win or draw
+            let status = findWinner(
+                currentPlayerMoves,
+                coordinates,
+                expectedMove
+            );
+            if (typeof status === "string") {
+                let message = status.startsWith("d")
+                    ? "Ended in a tie"
+                    : `Won by ${expectedMove}`;
+                let doc = await gameCollection.findOneAndUpdate(
+                    {
+                        _id: ObjectId(gameId),
+                    },
+                    {
+                        $push: {
+                            moves: {
+                                marker: currentPlayer.marker,
+                                cell: coordinates,
+                            },
+                        },
+                        $set: {
+                            isOver: true,
+                            remark: message,
+                        },
+                    }
+                );
+                if (!doc.ok) {
+                    return next(
+                        new ApplicationError("Unable to update the records")
+                    );
+                }
+                //console.log(doc.moves);
+                return res.json({
+                    message: message,
+                    moves: doc.value.moves.push(coordinates),
+                });
+            }
 
-            // Insert this move
             let doc = await gameCollection.findOneAndUpdate(
                 {
                     _id: ObjectId(gameId),
@@ -134,18 +171,20 @@ class Game {
                     $push: {
                         moves: {
                             marker: currentPlayer.marker,
-                            move: coordinates,
+                            cell: coordinates,
                         },
                     },
                 }
             );
-
-            // Return the state of the game
-            res.status(200).json({
-                data: {
-                    status: "OK",
-                },
-            });
+            if (doc) {
+                console.log(doc);
+                res.status(200).json({
+                    data: {
+                        status: "OK",
+                        moves: doc.value.moves.push(coordinates),
+                    },
+                });
+            }
         } catch (error) {
             return next(new ApplicationError(error.message));
         }
