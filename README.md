@@ -66,6 +66,9 @@ Configure the project before you launch it by doing the following :
 ### Getting Started
 
 -   Run this command to launch the development server : npm run devstart
+-   Create two players
+-   Create a new game
+-   Make a move
 -   When testing set the Databse to the Test DB in App.js . Run : npm run test
 
 ### Testing

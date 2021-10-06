@@ -1,6 +1,4 @@
 const mongoClient = require("../mongo-client");
-const signToken = require("../lib/sign-jwt-token");
-const jwtHeader = require("../lib/jwt-header");
 const {
     ApplicationError,
     BadRequestError,
@@ -8,8 +6,8 @@ const {
     NotFoundError,
     DbError,
 } = require("../lib/error-handler");
-const areAllNumbers = require("../lib/all-numbers");
-const isCoordinateUnique = require("../lib/unique-coordinates-checker");
+const isValidMove = require("../lib/is-valid-move");
+const isCoordinatePlayed = require("../lib/unique-coordinates-checker");
 const findWinner = require("../lib/check-game-winner");
 let ObjectId = require("mongodb").ObjectId;
 
@@ -89,7 +87,8 @@ class Game {
                 (player) => String(player.id) === String(playerId)
             );
 
-            //Retrieve all already played cells and retrieve the moves of the current player
+            //Retrieve all already played cells and
+            //retrieve the moves of the current player
             let cells, currentPlayerMoves;
             if (moves) {
                 //Each move forms a cell
@@ -110,15 +109,16 @@ class Game {
             }
 
             //Check if the values in the cordinates are valid
-            if (!areAllNumbers(coordinates)) {
+            if (!isValidMove(coordinates)) {
                 return next(
                     new BadRequestError("Invalid coodinate numbers provided")
                 );
             }
 
-            //Check if the coordinates are unique and not a repeat of already existing coordinates
+            //Check if the coordinates are unique and not a repeat
+            //of already existing coordinates
             if (moves) {
-                let hasPlayedCell = isCoordinateUnique(coordinates, cells);
+                let hasPlayedCell = isCoordinatePlayed(coordinates, cells);
                 if (hasPlayedCell) {
                     return next(new BadRequestError("Moves already played"));
                 }
@@ -130,6 +130,12 @@ class Game {
                 coordinates,
                 expectedMove
             );
+
+            let cellObj = {
+                marker: expectedMove,
+                cell: coordinates,
+            };
+
             if (typeof status === "string") {
                 let message = status.startsWith("d")
                     ? "Ended in a tie"
@@ -156,13 +162,15 @@ class Game {
                         new ApplicationError("Unable to update the records")
                     );
                 }
-                //console.log(doc.moves);
+
                 return res.json({
                     message: message,
-                    moves: doc.value.moves.push(coordinates),
+                    moves: moves
+                        ? doc.value.moves.concat([cellObj])
+                        : moves.concat(cellObj),
                 });
             }
-
+            // Update the db since game is still ongoing
             let doc = await gameCollection.findOneAndUpdate(
                 {
                     _id: ObjectId(gameId),
@@ -176,15 +184,20 @@ class Game {
                     },
                 }
             );
-            if (doc) {
-                console.log(doc);
-                res.status(200).json({
-                    data: {
-                        status: "OK",
-                        moves: doc.value.moves.push(coordinates),
-                    },
-                });
+            if (!doc) {
+                return next(
+                    new ApplicationError("Unable to update the records")
+                );
             }
+
+            res.status(200).json({
+                data: {
+                    status: "OK",
+                    moves: moves
+                        ? doc.value.moves.concat([cellObj])
+                        : [cellObj],
+                },
+            });
         } catch (error) {
             return next(new ApplicationError(error.message));
         }
