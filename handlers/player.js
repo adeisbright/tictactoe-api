@@ -1,6 +1,4 @@
 const mongoClient = require("../mongo-client");
-const signToken = require("../lib/sign-jwt-token");
-const jwtHeader = require("../lib/jwt-header");
 const {
     ApplicationError,
     BadRequestError,

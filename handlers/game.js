@@ -1,6 +1,4 @@
 const mongoClient = require("../mongo-client");
-const signToken = require("../lib/sign-jwt-token");
-const jwtHeader = require("../lib/jwt-header");
 const {
     ApplicationError,
     BadRequestError,
@@ -8,8 +6,9 @@ const {
     NotFoundError,
     DbError,
 } = require("../lib/error-handler");
-const areAllNumbers = require("../lib/all-numbers");
-const isCoordinateUnique = require("../lib/unique-coordinates-checker");
+const isValidMove = require("../lib/is-valid-move");
+const isCoordinatePlayed = require("../lib/unique-coordinates-checker");
+const findWinner = require("../lib/check-game-winner");
 let ObjectId = require("mongodb").ObjectId;
 
 class Game {
@@ -66,8 +65,8 @@ class Game {
             let db = await mongoClient.db(process.env.dbName);
             let gameCollection = db.collection("games");
 
-            // Check that the player has access to play this game
-            let isValidGame = await gameCollection.findOne(
+            // Check that this game exist for this player
+            let game = await gameCollection.findOne(
                 {
                     _id: ObjectId(gameId),
                 },
@@ -75,26 +74,28 @@ class Game {
                     "players.id": ObjectId(playerId),
                 }
             );
-            if (!isValidGame) {
-                return next(new NotFoundError("Not found"));
+            if (!game) {
+                return next(new NotFoundError("Game Not found "));
             }
-
+            if (game.isOver) {
+                return next(new BadRequestError("Game Over"));
+            }
             //Retrieve the players and the moves made for this game
-            let { players, moves } = isValidGame;
+            let { players, moves } = game;
 
             let currentPlayer = players.find(
                 (player) => String(player.id) === String(playerId)
             );
 
-            //Retrieve all already played cells
-            // Retrieve all moves already played by the current player
+            //Retrieve all already played cells and
+            //retrieve the moves of the current player
             let cells, currentPlayerMoves;
             if (moves) {
-                cells = moves.map((elem) => elem.move);
-
+                //Each move forms a cell
+                cells = moves.map((elem) => elem.cell);
                 currentPlayerMoves = moves
                     .filter((move) => move.marker === currentPlayer.marker)
-                    .map((cell) => cell.move);
+                    .map((val) => val.cell);
             }
 
             //Check if the right player made the move
@@ -108,24 +109,68 @@ class Game {
             }
 
             //Check if the values in the cordinates are valid
-            if (!areAllNumbers(coordinates)) {
+            if (!isValidMove(coordinates)) {
                 return next(
                     new BadRequestError("Invalid coodinate numbers provided")
                 );
             }
 
-            //Check if the coordinates are unique and not a repeat of already existing coordinates
+            //Check if the coordinates are unique and not a repeat
+            //of already existing coordinates
             if (moves) {
-                let hasPlayedCell = isCoordinateUnique(coordinates, cells);
+                let hasPlayedCell = isCoordinatePlayed(coordinates, cells);
                 if (hasPlayedCell) {
                     return next(new BadRequestError("Moves already played"));
                 }
             }
 
-            //Check if game has reached end
-            //Check for a win situation
+            //Check for a win or draw
+            let status = findWinner(
+                currentPlayerMoves,
+                coordinates,
+                expectedMove
+            );
 
-            // Insert this move
+            let cellObj = {
+                marker: expectedMove,
+                cell: coordinates,
+            };
+
+            if (typeof status === "string") {
+                let message = status.startsWith("d")
+                    ? "Ended in a tie"
+                    : `Won by ${expectedMove}`;
+                let doc = await gameCollection.findOneAndUpdate(
+                    {
+                        _id: ObjectId(gameId),
+                    },
+                    {
+                        $push: {
+                            moves: {
+                                marker: currentPlayer.marker,
+                                cell: coordinates,
+                            },
+                        },
+                        $set: {
+                            isOver: true,
+                            remark: message,
+                        },
+                    }
+                );
+                if (!doc.ok) {
+                    return next(
+                        new ApplicationError("Unable to update the records")
+                    );
+                }
+
+                return res.json({
+                    message: message,
+                    moves: moves
+                        ? doc.value.moves.concat([cellObj])
+                        : moves.concat(cellObj),
+                });
+            }
+            // Update the db since game is still ongoing
             let doc = await gameCollection.findOneAndUpdate(
                 {
                     _id: ObjectId(gameId),
@@ -134,16 +179,23 @@ class Game {
                     $push: {
                         moves: {
                             marker: currentPlayer.marker,
-                            move: coordinates,
+                            cell: coordinates,
                         },
                     },
                 }
             );
+            if (!doc) {
+                return next(
+                    new ApplicationError("Unable to update the records")
+                );
+            }
 
-            // Return the state of the game
             res.status(200).json({
                 data: {
                     status: "OK",
+                    moves: moves
+                        ? doc.value.moves.concat([cellObj])
+                        : [cellObj],
                 },
             });
         } catch (error) {
